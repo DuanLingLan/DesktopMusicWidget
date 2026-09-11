@@ -1194,10 +1194,15 @@ fn handle_command(state: &mut State, id: usize, code: u32) {
             commit(state);
         }
         ID_OK if code == BN_CLICKED => {
-            if commit(state) {
-                unsafe {
-                    let _ = DestroyWindow(state.hwnd);
-                }
+            // Only close when the values were accepted; otherwise the window
+            // stays open with the reason on the note line. Written as an early
+            // return rather than `if commit(..) { .. }` so that the guard and
+            // the side-effecting call are not merged into one condition.
+            if !commit(state) {
+                return;
+            }
+            unsafe {
+                let _ = DestroyWindow(state.hwnd);
             }
         }
         _ => {}

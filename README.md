@@ -51,8 +51,9 @@ click through without ever leaving what you were doing.
   window.)
 - **Optional autostart and autoplay.** HKCU only, so it never asks for admin.
 - **Bilingual.** English and Chinese, following the Windows UI language.
-- **Tiny and quiet.** ~3 MB, CPU-assisted Direct2D rendering at ~2 MB private
-  memory, and it only repaints when something actually changes.
+- **Tiny and quiet.** ~3 MB on disk, ~8 MB of private memory (CPU-assisted
+  Direct2D rendering rather than a GPU device), and it only repaints when
+  something actually changes.
 
 ## Download and run
 

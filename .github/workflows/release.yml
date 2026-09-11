@@ -27,7 +27,7 @@ jobs:
             label: msvc
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up MinGW for the GNU target
         if: matrix.label == 'gnu'
