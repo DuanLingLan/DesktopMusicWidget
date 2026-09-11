@@ -9,7 +9,8 @@
 //! build over a cosmetic resource would be a poor trade for anyone compiling
 //! from source.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// `{...}` placeholders are substituted by hand (not with `format!`) so the
 /// literal `\0` terminators the VERSIONINFO block needs survive untouched.
@@ -62,6 +63,68 @@ fn forward_slashes(path: &std::path::Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+/// Locates an executable on `PATH`. `env_var` is checked first so a user can
+/// point at a specific toolchain.
+fn find_tool(env_var: &str, names: &[&str]) -> Option<PathBuf> {
+    if let Some(explicit) = std::env::var_os(env_var) {
+        let path = PathBuf::from(explicit);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    let paths = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&paths) {
+        for name in names {
+            for candidate in [dir.join(name), dir.join(format!("{name}.exe"))] {
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// GNU targets: compile the `.rc` straight to a COFF object with `windres` and
+/// hand that object to the linker.
+///
+/// This deliberately does not go through `embed-resource`. On the CI runner that
+/// crate chains `windres` into `ar` to build an archive, and the archive came out
+/// as "file format not recognized" — the `ar` it picked up was not the
+/// target-matching one. A plain COFF object needs only `windres`, needs no
+/// archive step, and is accepted by `ld` directly.
+fn compile_gnu(rc_path: &Path, out_dir: &Path) -> Result<PathBuf, String> {
+    let windres = find_tool("WINDRES", &["x86_64-w64-mingw32-windres", "windres"])
+        .ok_or("windres was not found on PATH (install MinGW-w64 binutils)")?;
+
+    let object = out_dir.join("desktop-music-widget-res.o");
+    // `-O coff` alone is deliberate: windres has no `--output-arch` option (it
+    // rejects it outright), and the target-specific executable name looked up
+    // above is what decides the object's architecture.
+    let output = Command::new(&windres)
+        .arg("-i")
+        .arg(rc_path)
+        .arg("-o")
+        .arg(&object)
+        .arg("-O")
+        .arg("coff")
+        .output()
+        .map_err(|e| format!("cannot run {}: {e}", windres.display()))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "windres failed ({}):\n{}{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    if !object.is_file() {
+        return Err("windres reported success but produced no object file".into());
+    }
+    Ok(object)
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=assets/app.manifest");
@@ -100,9 +163,22 @@ fn main() {
         return;
     }
 
-    // `manifest_optional` keeps a missing resource compiler from failing the
-    // build outright.
-    if let Err(e) = embed_resource::compile(&rc_path, embed_resource::NONE).manifest_optional() {
+    let is_gnu = std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("gnu");
+    let outcome = if is_gnu {
+        compile_gnu(&rc_path, &out_dir).map(|object| {
+            println!("cargo:rustc-link-arg={}", object.display());
+        })
+    } else {
+        // MSVC: the crate locates the Windows SDK's rc.exe, compiles the .rc and
+        // also arranges for the manifest to be the one the linker uses.
+        // `manifest_optional` keeps a missing resource compiler from failing the
+        // build outright.
+        embed_resource::compile(&rc_path, embed_resource::NONE)
+            .manifest_optional()
+            .map_err(|e| e.to_string())
+    };
+
+    if let Err(e) = outcome {
         println!(
             "cargo:warning=could not embed the Windows resources ({e}); \
              the build will continue without an app icon or themed controls"
@@ -152,5 +228,23 @@ mod tests {
             rendered.contains("1 24 \"m\""),
             "manifest id 24 is required"
         );
+    }
+
+    #[test]
+    fn an_absent_tool_is_reported_as_missing() {
+        // The lookup must not panic and must not invent a path.
+        assert!(find_tool(
+            "DESKTOP_MUSIC_WIDGET_NO_SUCH_TOOL",
+            &["definitely-not-a-real-tool-9f3a2b"]
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn tool_lookup_finds_a_tool_that_is_definitely_present() {
+        // `cmd.exe` exists on every Windows install, so this exercises the PATH
+        // walk for real rather than the fallback.
+        let found = find_tool("DESKTOP_MUSIC_WIDGET_NO_SUCH_TOOL", &["cmd"]);
+        assert!(found.is_some(), "cmd.exe should be found on PATH");
     }
 }
