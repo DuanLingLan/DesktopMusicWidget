@@ -48,8 +48,6 @@ const REDRAW_TIMER: usize = 1;
 pub const REDRAW_INTERVAL_MS: u32 = 250;
 pub const REDRAW_TIMER_ID: usize = REDRAW_TIMER;
 const TRAY_UID: u32 = 1;
-/// Shortest gap between two full Z-order re-assertions.
-const Z_ORDER_FIX_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000);
 
 /// Physical pixels -> logical (96-dpi) units, which is what the layout uses.
 fn scale_from_physical(px: i32, dpi: u32) -> f32 {
@@ -145,15 +143,6 @@ pub struct App {
     hovering: bool,
     tracking: bool,
     seeking: bool,
-    /// The window the card is stacked above in desktop mode, remembered so
-    /// `maintain_z_order` can tell whether the card is still where it belongs.
-    anchor: Option<HWND>,
-    /// When the Z order was last re-asserted. The cheap "am I in place?" test
-    /// cannot see through every Z-order topology, so a negative answer only means
-    /// "re-resolve" — and that is rate-limited, because re-inserting the card
-    /// where it already is costs nothing visually but would otherwise burn an
-    /// EnumWindows pass on every tick.
-    last_z_fix: Option<std::time::Instant>,
     /// "Move window" mode: a plain left-drag repositions the card.
     pub moving: bool,
     dragging: bool,
@@ -206,8 +195,6 @@ impl App {
             hovering: false,
             tracking: false,
             seeking: false,
-            anchor: None,
-            last_z_fix: None,
             moving: false,
             dragging: false,
             drag_cursor: (0, 0),
@@ -280,10 +267,9 @@ impl App {
         Ok(())
     }
 
-    pub fn apply_z_order(&mut self) {
+    pub fn apply_z_order(&self) {
         unsafe {
             if self.cfg.mode == "topmost" {
-                self.anchor = None;
                 let _ = SetWindowPos(
                     self.hwnd,
                     Some(HWND_TOPMOST),
@@ -298,9 +284,7 @@ impl App {
 
             // Desktop layer: sit directly above whatever draws the wallpaper, so
             // the card is above the icons' background but below normal windows.
-            let anchor = desktop_anchor();
-            self.anchor = anchor;
-            match anchor {
+            match desktop_anchor() {
                 Some(anchor) => {
                     let _ = SetWindowPos(
                         self.hwnd,
@@ -326,64 +310,6 @@ impl App {
             }
         }
     }
-
-    /// Keeps the card in the desktop layer.
-    ///
-    /// "Show Desktop" — the taskbar's right-hand button, and Win+D — does not
-    /// minimise the windows it covers. It raises the desktop band to the top of
-    /// the Z order instead, so a desktop-layer card ends up *buried* rather than
-    /// minimised: `IsIconic` stays false and `IsWindowVisible` stays true, which
-    /// is what makes the symptom ("the widget vanished, but Windows insists it is
-    /// visible") so confusing to chase.
-    ///
-    /// Rather than trying to detect that specific event, this simply asserts the
-    /// invariant the card wants anyway: *the card sits directly above its desktop
-    /// anchor*. The normal case costs two cheap calls; only a genuine displacement
-    /// triggers a re-resolve and one `SetWindowPos`.
-    ///
-    /// Note the direction, which was measured rather than assumed:
-    /// `SetWindowPos(hwnd, Some(x), ..)` places `hwnd` directly **above** `x`.
-    ///
-    /// This also mends two other real drifts: opening the context menu calls
-    /// `SetForegroundWindow`, which lifts the card out of the desktop layer, and
-    /// Explorer restarting hands us a dead anchor.
-    fn maintain_z_order(&mut self) {
-        if self.cfg.mode == "topmost" {
-            return;
-        }
-        if self
-            .last_z_fix
-            .is_some_and(|last| last.elapsed() < Z_ORDER_FIX_INTERVAL)
-        {
-            return;
-        }
-        self.last_z_fix = Some(std::time::Instant::now());
-
-        // Unconditionally re-insert above the topmost shell desktop window.
-        //
-        // The obvious optimisation — ask "has the desktop been raised over me?"
-        // and only act on a yes — was tried and abandoned. It cannot be answered
-        // cheaply *and* correctly: the sibling Z-order chain (`GW_HWNDPREV`) and
-        // `EnumWindows` disagree near the desktop, so the cheap test reported
-        // "already in place" in exactly the case that mattered and silently
-        // disabled the fix. Re-inserting the card where it already belongs is
-        // idempotent, and the lookup below is class-name only, so paying for it
-        // once a second is the honest trade.
-        let after = shell_desktop_top().or(self.anchor).unwrap_or(HWND_BOTTOM);
-        self.anchor = Some(after);
-        unsafe {
-            let _ = SetWindowPos(
-                self.hwnd,
-                Some(after),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
-        }
-    }
-    /// Recreates the surface style from the config and hands it to the renderer.
     fn sync_surface_style(&mut self) -> Result<()> {
         self.surface.set_style(style_for(&self.cfg))
     }
@@ -632,6 +558,13 @@ impl App {
         if let Some(action) = menu::show_at_cursor(self) {
             self.perform(action);
         }
+        // `TrackPopupMenu` requires the card to be the foreground window, and
+        // `SetForegroundWindow` lifts a window to the top of its band — so the
+        // card has to be put back into the desktop layer as soon as the menu
+        // closes, or it stays floating above ordinary application windows.
+        // Doing it here, once per menu, rather than on a timer keeps an idle
+        // widget at zero cost.
+        self.apply_z_order();
     }
 
     fn set_volume(&mut self, volume: u32) {
@@ -1218,9 +1151,6 @@ impl App {
             }
             WM_TIMER => {
                 self.poll_state();
-                // Re-assert the desktop-layer Z order: "Show Desktop" buries the
-                // card by raising the desktop over it.
-                self.maintain_z_order();
                 LRESULT(0)
             }
             _ => unsafe { DefWindowProcW(self.hwnd, msg, wparam, lparam) },
@@ -1308,36 +1238,6 @@ pub enum AnchorKind {
 /// there, and plain `HWND_BOTTOM` can land underneath the desktop icon layer —
 /// so the Explorer desktop band is used instead. That is what makes the widget
 /// work standalone.
-unsafe extern "system" fn enum_shell_band_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    let found = &mut *(lparam.0 as *mut Option<HWND>);
-    if found.is_some() || !IsWindowVisible(hwnd).as_bool() {
-        return TRUE;
-    }
-    let mut buf = [0u16; 64];
-    let n = GetClassNameW(hwnd, &mut buf) as usize;
-    let name = &buf[..n];
-    if name == w!("Progman").as_wide() || name == w!("WorkerW").as_wide() {
-        *found = Some(hwnd);
-    }
-    TRUE
-}
-
-/// The topmost shell desktop-band window.
-///
-/// Deliberately class-name only, with no process inspection: this runs on the
-/// redraw timer, whereas `desktop_anchor_kind` opens a handle per visible window
-/// and so is reserved for startup and for config changes.
-fn shell_desktop_top() -> Option<HWND> {
-    let mut found: Option<HWND> = None;
-    unsafe {
-        let _ = EnumWindows(
-            Some(enum_shell_band_proc),
-            LPARAM(&mut found as *mut Option<HWND> as isize),
-        );
-    }
-    found
-}
-
 pub fn desktop_anchor_kind() -> (Option<HWND>, AnchorKind) {
     // One tuple so the callback can fill both lists without moving them.
     let mut found: (Vec<HWND>, Vec<HWND>) = (Vec::new(), Vec::new());

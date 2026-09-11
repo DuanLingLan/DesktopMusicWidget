@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-09-12
+
+### Changed
+
+- Removed the once-a-second Z-order re-assert introduced in 1.0.1. It did not fix
+  Show Desktop (see the known issue below) and cost roughly 0.5% of one core while
+  idle, which is a bad trade for a widget whose whole point is being cheap when
+  nothing is happening. The repair now happens once, where the damage is actually
+  done: immediately after the context menu closes.
+- Context menu handlers therefore no longer leave the card floating above ordinary
+  application windows.
+
+### Known issue
+
+- **"Show Desktop" (the taskbar's right-hand edge, and Win+D) still takes the card
+  with it.** That action does not minimise the windows it covers: it raises the
+  desktop band to the top of the Z order, so a desktop-layer card is buried rather
+  than minimised - `IsIconic` stays false and `IsWindowVisible` stays true, which
+  is why the symptom reads as "the widget vanished but Windows insists it is
+  visible". Re-inserting the card above the desktop window, once a second or once
+  per event, does not survive it. The likely correct fix is to reparent the card
+  into the desktop band (`SetParent` to `Progman`/`WorkerW`), which is invasive:
+  input routing, clipping and the `topmost` mode all have to be reworked. Many
+  desktop widgets simply accept this behaviour.
+
 ## [1.0.1] - 2026-09-12
 
 ### Fixed
@@ -13,30 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   calls `SetForegroundWindow`, which lifts a window to the top of its band, so
   after the first right-click the card floated above ordinary application windows
   instead of sitting above the wallpaper (measured at index 52 of 230 rather than
-  224). It is now put back within one tick, and the same repair covers Explorer
-  restarting, which previously left a dead Z-order anchor behind.
-- "Show Desktop" (the taskbar's right-hand button, and Win+D) no longer takes the
-  card with it. That action does not minimise the windows it covers: it raises the
-  desktop band to the top of the Z order, so a desktop-layer card ends up buried
-  rather than minimised - `IsIconic` stays false and `IsWindowVisible` stays true,
-  which is why the symptom reads as "the widget vanished but Windows insists it is
-  visible". The card now re-asserts its place above the desktop band once a
-  second, which also covers any other window that displaces it.
-- `WM_WINDOWPOSCHANGING` now clears `SWP_HIDEWINDOW`, so nothing can hide the card
-  outright.
+  224). Explorer restarting had the same effect by leaving a dead Z-order anchor
+  behind.
 
 ### Notes
 
-- The one-second re-assert costs roughly 0.5% of one core while idle. That is the
-  price of not trusting a cheap "am I still in place?" test: the sibling Z-order
-  chain (`GW_HWNDPREV`) and `EnumWindows` disagree near the desktop, and the cheap
-  test answered "already in place" in exactly the case that mattered, silently
-  disabling the repair.
-- Show Desktop could only be reproduced with a synthetic Win+D, and the window
-  state APIs give contradictory answers about visibility, so this one deserves a
-  visual confirmation.
-
-[1.0.1]: https://github.com/DuanLingLan/DesktopMusicWidget/releases/tag/v1.0.1
+- This release also carried a once-a-second Z-order re-assert intended to fix Show
+  Desktop. **It did not work** and was removed in 1.0.2. The changelog entry was
+  corrected after the fact rather than left claiming a fix that never shipped.
 ## [1.0.0] - 2026-09-11
 
 First public release. DesktopMusicWidget is the published descendant of a
