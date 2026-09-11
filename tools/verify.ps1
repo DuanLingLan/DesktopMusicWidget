@@ -131,7 +131,11 @@ Start-Sleep -Seconds 4
 $log = Get-Content (Join-Path $cfg 'widget.log') -Raw
 Check 'process stayed alive' (-not $p.HasExited)
 Check 'a track was published' (Log-Has $log 'now playing: First Track|now playing: Second Track')
-Check 'fallback title came from the file stem' (Log-Has $log 'First Track')
+# Shuffle picks either fixture first, so accept both stems: the point is that
+# the title fell back to the file name (there are no tags) rather than being
+# empty or showing the full path.
+          Check 'fallback title came from the file stem' (Log-Has $log 'now playing: (First|Second) Track - ')
+          Check 'tag-less track shows the no-artist placeholder' (Log-Has $log 'now playing: (First|Second) Track - \(no artist tag\)')
 Check 'no decode failures' (-not (Log-Has $log 'cannot decode'))
 Stop-Quietly $p
 
