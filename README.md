@@ -45,8 +45,10 @@ click through without ever leaving what you were doing.
   name or path, and choose which extensions count as music.
 - **A full right-click menu** on both the card and the tray icon: transport,
   play mode, folders, scan scope, autostart, autoplay, window layer, monitor.
-- **A real settings window** for size, position, opacity, volume, font, colours,
-  language and hotkeys — applied live, saved to a readable TOML file.
+- **A real settings window** for size, position, opacity, volume, font, window
+  layer, monitor, language and hotkeys — applied live, saved to a readable TOML
+  file. (Card colours are the one thing edited in the config file rather than the
+  window.)
 - **Optional autostart and autoplay.** HKCU only, so it never asks for admin.
 - **Bilingual.** English and Chinese, following the Windows UI language.
 - **Tiny and quiet.** ~3 MB, CPU-assisted Direct2D rendering at ~2 MB private
@@ -199,7 +201,8 @@ Useful fields:
 
 `[theme]` keys are `background`, `art_bg`, `title`, `subtitle`, `bar_bg` and
 `bar_fg`; a value that cannot be parsed silently falls back to the default rather
-than rendering an invisible card.
+than rendering an invisible card. These are the only settings the window does not
+expose — edit them here and use **Reload config**.
 
 Bad values never stop the app: they are clamped or reset to the default, logged
 to `widget.log`, and written back so the file always describes what is running. A
