@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: fmt + clippy + test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      # The resource compiler is optional in build.rs, so a missing Windows SDK
+      # cannot turn a lint run red.
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --all-targets
+
+      - name: Release build
+        run: cargo build --release
+
+      # The command-line modes need no window, so they are the only way to cover
+      # argument parsing and the scanner on a headless runner.
+      #
+      # NOTE: PowerShell does not wait for a GUI-subsystem executable, so `& exe`
+      # would return immediately with no output. Start-Process -Wait is required.
+      - name: Command-line smoke test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path 'target/release/desktop-music-widget.exe').Path
+          $out = Join-Path $env:RUNNER_TEMP 'dmw-out.txt'
+          $err = Join-Path $env:RUNNER_TEMP 'dmw-err.txt'
+
+          function Invoke-Cli {
+            param([string[]]$CliArgs)
+            $p = Start-Process -FilePath $exe -ArgumentList $CliArgs -Wait -PassThru `
+                 -RedirectStandardOutput $out -RedirectStandardError $err
+            [pscustomobject]@{
+              Code = $p.ExitCode
+              Out  = ((Get-Content $out -Raw -ErrorAction SilentlyContinue) ?? '').Trim()
+              Err  = ((Get-Content $err -Raw -ErrorAction SilentlyContinue) ?? '').Trim()
+            }
+          }
+
+          $r = Invoke-Cli @('--version')
+          Write-Host "version: $($r.Out) (exit $($r.Code))"
+          if ($r.Code -ne 0) { throw "--version exited $($r.Code): $($r.Err)" }
+          if ($r.Out -notmatch '^DesktopMusicWidget \d+\.\d+\.\d+$') { throw "unexpected --version output: $($r.Out)" }
+
+          $r = Invoke-Cli @('--help')
+          if ($r.Code -ne 0) { throw "--help exited $($r.Code)" }
+          if ($r.Out -notmatch '--count-tracks') { throw "--help does not document the flags" }
+
+          $cfg = Join-Path $env:RUNNER_TEMP 'dmw-ci'
+          $r = Invoke-Cli @('--dump-config', '--config-dir', $cfg)
+          if ($r.Code -ne 0) { throw "--dump-config exited $($r.Code): $($r.Err)" }
+          if ($r.Out -notmatch 'config_version') { throw "--dump-config produced no config" }
+
+          # Two tracks, one of them nested, plus a file that must be ignored.
+          $music = Join-Path $env:RUNNER_TEMP 'dmw-ci-music'
+          New-Item -ItemType Directory -Path (Join-Path $music 'sub') -Force | Out-Null
+          Set-Content (Join-Path $music 'a.mp3') 'x'
+          Set-Content (Join-Path $music 'b.txt') 'x'
+          Set-Content (Join-Path $music 'sub/c.flac') 'x'
+
+          $r = Invoke-Cli @('--count-tracks', '--dir', $music)
+          Write-Host "tracks found: $($r.Out)"
+          if ($r.Out -ne '2') { throw "expected 2 tracks, got '$($r.Out)'" }
+
+      - name: Diagnostic tool runs headless
+        shell: pwsh
+        run: |
+          $out = & target/release/diag.exe 2>&1 | Out-String
+          Write-Host $out
+          if ($out -notmatch 'widget window not found') {
+            throw 'diag should report that the widget is not running'
+          }

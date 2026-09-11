@@ -1,0 +1,103 @@
+name: Bug report
+description: Something does not work the way the README says it should
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report.
+
+        **DesktopMusicWidget is Windows 10/11 x64 only**, and it is unsigned, so a
+        SmartScreen warning on first run is expected and not a bug.
+
+        Before filing, please have two things ready — they are the first questions
+        anyone will ask:
+
+        * the output of **`diag.exe`** (it ships next to the exe and prints the Z
+          order, the desktop anchor chosen and the monitor layout);
+        * the contents of **`%APPDATA%\DesktopMusicWidget\widget.log`** (or
+          `widget.log` next to the exe in portable mode).
+
+  - type: checkboxes
+    id: origin
+    attributes:
+      label: Where did this build come from?
+      description: Please confirm at least one. Support is best for official builds.
+      options:
+        - label: I downloaded an official release from the Releases page, or I built it from source.
+          required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you saw, and what you expected instead.
+      placeholder: The card shows "Not playing" even though the folder has 200 mp3 files...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact sequence, including whether it happens on every launch.
+      placeholder: |
+        1. Unzip the release and run desktop-music-widget.exe
+        2. Pick D:\Music in the first-run wizard
+        3. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: wallpaper-engine
+    attributes:
+      label: Is Wallpaper Engine running?
+      description: The card stacks above Wallpaper Engine when it is running, and anchors to the Explorer desktop band when it is not.
+      options:
+        - "No — not installed"
+        - "No — installed but not running"
+        - "Yes — running"
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: card-visible
+    attributes:
+      label: Is the card visible at all?
+      options:
+        - "Yes — the card is visible and the problem is something else"
+        - "No — nothing appears on the desktop"
+        - "It appears and then disappears"
+        - "It only appears when I run mode = topmost"
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: diag
+    attributes:
+      label: Output of diag.exe
+      description: Run diag.exe from a terminal while the widget is running and paste everything it prints.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Contents of widget.log
+      description: "`%APPDATA%\\DesktopMusicWidget\\widget.log`, or `widget.log` next to the exe in portable mode. The most recent session is usually enough."
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: windows-version
+    attributes:
+      label: Windows version
+      description: "`winver` — for example Windows 11 23H2 (build 22631)."
+    validations:
+      required: false

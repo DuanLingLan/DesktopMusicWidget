@@ -1,0 +1,51 @@
+name: Feature request
+description: Suggest a change or a new capability
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion.
+
+        A quick scope note first: DesktopMusicWidget is a lightweight folder player,
+        not a library manager. Lyrics, streaming services, playlists and an
+        equaliser are explicitly out of scope, and Opus/WMA playback is not possible
+        because the audio backend has no decoder for them. Requests inside those
+        areas will be closed.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the situation you are in, not the implementation.
+      placeholder: I keep two music folders and switch between them by editing the config file every time...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+      description: Your suggested behaviour, including where it would live (card, right-click menu, settings window or config file).
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you have considered
+      description: Including anything you can already do today with the config file or the command line.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I have searched the existing issues and this has not been requested already.
+          required: true
+        - label: This is not one of the out-of-scope items above (lyrics, streaming, playlists, EQ, Opus/WMA).
+          required: true

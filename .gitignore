@@ -1,0 +1,13 @@
+/target
+**/*.exe
+**/*.pdb
+**/*.dll
+**/*.lib
+**/*.o
+**/*.res
+*.log
+*.log.1
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

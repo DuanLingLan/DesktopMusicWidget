@@ -1,0 +1,146 @@
+# DesktopMusicWidget configuration
+# =================================
+#
+# Every option the app understands, with its default. Anything you leave out
+# falls back to the default, and anything invalid is repaired with a warning in
+# widget.log rather than stopping the app from starting.
+#
+# Where this file lives:
+#   %APPDATA%\DesktopMusicWidget\config.toml      (normal)
+#   next to the exe                               (portable, takes priority)
+#
+# The settings window writes this file for you; hand-editing is fine too, and
+# "Reload config" in the right-click menu picks up changes without a restart.
+#
+# 本文件为全部配置项及默认值。设置窗口会自动写入，也可手动编辑；
+# 右键菜单里的"重新加载配置"可在不重启的情况下生效。
+
+# Schema version. Leave it alone: 1 meant the pre-rename layout, 2 is current,
+# and an absent value is treated as 1 so old files migrate automatically.
+config_version = 2
+
+# Interface language: "auto" (follow Windows), "zh-CN" or "en".
+# 界面语言：auto 跟随系统 / zh-CN / en。
+# Song titles are always laid out with the system locale, so switching this does
+# not affect non-Latin text rendering.
+language = "auto"
+
+# Folders to scan. Absolute paths; several are allowed and duplicates ignored.
+# An EMPTY list means "not configured yet", which makes the app ask for a folder
+# on the next start.
+# 音乐目录（绝对路径，可多个）。留空则下次启动时弹出选择向导。
+library = ["C:\\Users\\YourName\\Music"]
+
+# Include subfolders of the library roots. Turn this off to scan only the files
+# sitting directly in each folder.
+# 是否递归扫描子文件夹。
+scan_recursive = true
+
+# Folders to skip, matched two ways:
+#   * a bare name  -> any folder with that name, anywhere, case-insensitively
+#   * a path       -> that folder and everything under it
+# 排除的文件夹：只写名字则按名匹配（大小写不敏感）；写完整路径则连同其子目录一起排除。
+exclude_dirs = ["Podcasts", "Samples", "C:\\Users\\YourName\\Music\\Temporary"]
+
+# Extensions to treat as music (lower case, no leading dot).
+# These match the decoders actually compiled in. Opus and WMA are deliberately
+# absent: the audio backend has no support for them, so listing them would only
+# produce silent decode failures.
+# 识别的扩展名。Opus / WMA 不支持，请不要添加。
+extensions = [
+    "mp3",
+    "flac",
+    "wav",
+    "m4a",
+    "m4b",
+    "aac",
+    "ogg",
+    "oga",
+    "aiff",
+]
+
+# What plays after the current track: "sequential", "shuffle" or "repeat-one".
+# 播放模式：顺序 / 随机 / 单曲循环。
+play_mode = "shuffle"
+
+# Volume, 0-100. (The UI maps this through a power curve, so 50 is quieter than
+# half of 100.)
+# 音量 0-100。
+volume = 70
+
+# Start playing as soon as a queue is ready. Off means the library loads but
+# stays paused until you press play.
+# 启动时自动播放。关闭后加载曲库但保持暂停。
+autoplay = true
+
+# Start with Windows. Written to HKCU\...\Run (per user, no admin prompt); the
+# app repairs the registry entry at startup if the exe has been moved.
+# 开机自启动（写 HKCU，无需管理员）。exe 被移动后启动时会自动修正注册表项。
+autostart = false
+
+# Global hotkeys. Never uses the Windows key, which the shell reserves.
+# 全局快捷键开关。
+hotkeys_enabled = true
+# "ctrl-alt"        -> Ctrl+Alt+Space and Ctrl+Alt+arrows
+# "ctrl-shift-alt"  -> the same with Shift added
+# Ctrl+Alt+arrows are claimed by the Intel graphics driver on some machines; the
+# app retries with Shift automatically, and Settings reports anything it could
+# not claim.
+hotkey_preset = "ctrl-alt"
+
+# Window layer:
+#   "bottom"  -> the desktop layer, above the wallpaper and desktop icons but
+#                below normal windows. This is the point of the whole thing.
+#   "topmost" -> floats above every window.
+# 窗口层级：bottom 桌面层（推荐）；topmost 置顶。
+mode = "bottom"
+
+# Which monitor to sit on: -1 = primary, otherwise a zero-based index.
+# Monitors are ordered left to right, top to bottom. -1 is safest because it
+# keeps working when the display layout changes.
+# 显示器：-1 主显示器，或从 0 开始的序号。
+monitor = -1
+
+# Placement on that monitor:
+#   "top-left" | "top-center" | "top-right"
+#   "free"    -> offset_x / offset_y are absolute logical pixels, which is what
+#                dragging the card in "Move window" mode writes back.
+# 位置：top-left / top-center / top-right / free（拖动定位后写回 free）。
+anchor = "top-center"
+
+# Offsets from the anchor, in logical (96-dpi) pixels. With "free" these are
+# absolute coordinates on the chosen monitor.
+offset_x = 0
+offset_y = 24
+
+# Card size in logical pixels. Width 200-900, height 64-400.
+# 卡片尺寸（逻辑像素）。
+width = 340
+height = 96
+
+# Corner radius, 0 to height/2.
+# 圆角半径。
+corner_radius = 14.0
+
+# Card background opacity, 0.0-1.0.
+# 卡片背景不透明度。
+card_opacity = 0.78
+
+# Show the transport controls only while the pointer is over the card, or always.
+# 控制按钮显示时机：hover 悬停时 / always 始终。
+show_controls = "hover"
+
+# Any installed font. "Segoe UI" is the Windows default and the safe choice.
+# 字体。
+font_family = "Segoe UI"
+
+# Colours, as #rrggbb or #rrggbbaa (alpha last). An unparseable value silently
+# falls back to the default rather than making the card invisible.
+# 配色：#rrggbb 或 #rrggbbaa，写错则回退默认值。
+[theme]
+background = "#121217" # card background
+art_bg = "#ffffff1a"   # placeholder square while a track has no cover art
+title = "#fffffff5"    # track title, and the transport glyphs
+subtitle = "#ffffff99" # artist line, and status messages
+bar_bg = "#ffffff29"   # unplayed part of the progress bar
+bar_fg = "#ffffffd9"   # played part of the progress bar

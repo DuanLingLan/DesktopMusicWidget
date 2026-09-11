@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.label }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The GNU build matches what the maintainer can reproduce locally, and
+          # needs no Visual C++ redistributable: it links against msvcrt.dll,
+          # which ships with Windows.
+          - target: x86_64-pc-windows-gnu
+            label: gnu
+          # The MSVC build is the one most users expect, with a statically linked
+          # CRT so it is equally self-contained.
+          - target: x86_64-pc-windows-msvc
+            label: msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MinGW for the GNU target
+        if: matrix.label == 'gnu'
+        uses: msys2/setup-msys2@v2
+        with:
+          install: mingw-w64-x86_64-gcc
+          path-type: inherit
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.label }}
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.label }}" = "msvc" ]; then
+            # Avoids any dependency on the VC++ redistributable.
+            export RUSTFLAGS="-C target-feature=+crt-static"
+          fi
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $target = '${{ matrix.target }}'
+          $label  = '${{ matrix.label }}'
+          $version = '${{ github.ref_name }}'
+          if ($version -notmatch '^v') { $version = "v$version" }
+          $name = "DesktopMusicWidget-$version-windows-x64-$label"
+
+          $dist = Join-Path $env:RUNNER_TEMP $name
+          New-Item -ItemType Directory -Path $dist -Force | Out-Null
+
+          $rel = "target/$target/release"
+          Copy-Item "$rel/desktop-music-widget.exe" $dist
+          Copy-Item "$rel/diag.exe" $dist
+          Copy-Item 'LICENSE' $dist
+          Copy-Item 'README.md' $dist
+          Copy-Item 'config.example.toml' $dist
+          # A short plain-text first-read, so the zip explains itself.
+          Copy-Item 'packaging/README-first.txt' (Join-Path $dist 'README-first.txt')
+
+          $zip = "$name.zip"
+          Compress-Archive -Path (Join-Path $dist '*') -DestinationPath $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $name.zip" | Set-Content "$zip.sha256" -Encoding ascii
+
+          Write-Host "packaged $zip"
+          Get-ChildItem $dist | Select-Object Name, Length
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}
+          path: |
+            *.zip
+            *.sha256
+          if-no-files-found: error
+
+  release:
+    name: publish
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Combine checksums
+        run: |
+          set -euo pipefail
+          cd artifacts
+          ls -l
+          cat ./*.sha256 | sort > SHA256SUMS.txt
+          echo "--- SHA256SUMS.txt ---"
+          cat SHA256SUMS.txt
+
+      - name: Create the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.zip
+            artifacts/SHA256SUMS.txt
+          generate_release_notes: true
+          draft: false
+          body: |
+            Desktop-music widget for Windows 10/11 (x64). No installer, no
+            runtime to install: unzip and run `desktop-music-widget.exe`.
+
+            * `...-gnu.zip` and `...-msvc.zip` are the same program built with two
+              toolchains. Either works; the msvc build is the usual choice.
+            * `diag.exe` prints the card's z-order, the desktop anchor and the
+              monitors, and is what to attach to a bug report along with
+              `widget.log`.
+            * Verify your download against `SHA256SUMS.txt`.
+
+            The binaries are not code-signed, so Windows SmartScreen may warn the
+            first time. See the Troubleshooting section of the README.

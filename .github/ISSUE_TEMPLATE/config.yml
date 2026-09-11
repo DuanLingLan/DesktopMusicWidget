@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and discussions
+    url: https://github.com/DuanLingLan/DesktopMusicWidget/discussions
+    about: Ask questions, share your setup, or float an idea before it becomes an issue.
+  - name: Documentation
+    url: https://github.com/DuanLingLan/DesktopMusicWidget#readme
+    about: The README covers installation, configuration, the command line and troubleshooting.
