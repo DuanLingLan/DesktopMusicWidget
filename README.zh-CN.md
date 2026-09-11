@@ -295,7 +295,7 @@ exe 会出现在 `target/release/`，与 `diag.exe` 放在一起。
 ## 验证构建
 
 ```powershell
-cargo test --all-targets          # 95 unit tests: config, migration, scanner, menus, i18n
+cargo test --all-targets          # 98 unit tests: config, migration, scanner, menus, i18n
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
 

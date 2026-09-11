@@ -321,7 +321,7 @@ warning — you lose the icon and the themed controls, nothing else.
 ## Verifying a build
 
 ```powershell
-cargo test --all-targets          # 95 unit tests: config, migration, scanner, menus, i18n
+cargo test --all-targets          # 98 unit tests: config, migration, scanner, menus, i18n
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
 

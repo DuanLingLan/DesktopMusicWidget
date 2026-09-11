@@ -74,5 +74,10 @@ use and build.
   was silently not migrated to `play_mode`.
 - The card's status line now reports a missing music folder, an empty library and a
   missing audio device, instead of sitting on the loading text forever.
+- `language = "zh-CN"` is no longer rejected. Enum values were compared after
+  lowercasing only the configured value, so a value that contains capitals never
+  matched the allowed list, the language was reset to `auto`, and the setting
+  silently reverted on the next start. Comparison is now case-insensitive in both
+  directions and the canonical spelling is written back.
 
 [1.0.0]: https://github.com/DuanLingLan/DesktopMusicWidget/releases/tag/v1.0.0

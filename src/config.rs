@@ -349,8 +349,12 @@ fn migrate(mut cfg: Config, text: &str) -> Config {
 
 fn fix_enum(field: &mut String, allowed: &[&str], default: &str, name: &str, w: &mut Vec<String>) {
     let lowered = field.trim().to_ascii_lowercase();
-    if allowed.contains(&lowered.as_str()) {
-        *field = lowered;
+    // Compare case-insensitively and store the canonical spelling. Lowercasing
+    // only the field would reject the documented "zh-CN" against a list that
+    // holds it with capitals — which silently reset the language to "auto" and
+    // undid the user's choice on the next start.
+    if let Some(canonical) = allowed.iter().find(|a| a.to_ascii_lowercase() == lowered) {
+        *field = (*canonical).to_string();
         return;
     }
     w.push(format!("{name} = {field:?} 无效，已改为 {default:?}"));
@@ -637,6 +641,72 @@ mod tests {
         assert_eq!(cfg.show_controls, "hover");
         assert_eq!(cfg.language, "auto");
         assert_eq!(cfg.hotkey_preset, "ctrl-alt");
+    }
+
+    #[test]
+    fn mixed_case_enum_values_are_accepted_and_canonicalised() {
+        // Regression: "zh-CN" is the documented spelling (and the one the
+        // settings window writes), but lowercasing the field before comparing it
+        // against a mixed-case list rejected it and reset the language to
+        // "auto", silently undoing the user's choice on the next start.
+        let mut cfg = Config {
+            language: "zh-CN".into(),
+            ..Config::default()
+        };
+        let w = validate(&mut cfg);
+        assert!(w.is_empty(), "a valid language must not be reported: {w:?}");
+        assert_eq!(cfg.language, "zh-CN", "must keep the canonical spelling");
+
+        // Sloppy casing is repaired to the canonical form rather than rejected.
+        let mut cfg = Config {
+            language: "ZH-cn".into(),
+            ..Config::default()
+        };
+        let w = validate(&mut cfg);
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(cfg.language, "zh-CN");
+    }
+
+    #[test]
+    fn every_documented_language_value_survives_validation() {
+        for value in LANGUAGES {
+            let mut cfg = Config {
+                language: (*value).to_string(),
+                ..Config::default()
+            };
+            let w = validate(&mut cfg);
+            assert!(w.is_empty(), "{value} was rejected: {w:?}");
+            assert_eq!(&cfg.language, value);
+        }
+    }
+
+    #[test]
+    fn every_documented_enum_value_survives_validation() {
+        // A value that the config accepts must round-trip: this is what ties the
+        // allowed lists to what the settings window and the menu write.
+        for (field, allowed) in [
+            ("play_mode", PLAY_MODES),
+            ("mode", MODES),
+            ("anchor", ANCHORS),
+            ("show_controls", SHOW_CONTROLS),
+            ("language", LANGUAGES),
+            ("hotkey_preset", HOTKEY_PRESETS),
+        ] {
+            for value in allowed {
+                let mut cfg = Config::default();
+                match field {
+                    "play_mode" => cfg.play_mode = (*value).to_string(),
+                    "mode" => cfg.mode = (*value).to_string(),
+                    "anchor" => cfg.anchor = (*value).to_string(),
+                    "show_controls" => cfg.show_controls = (*value).to_string(),
+                    "language" => cfg.language = (*value).to_string(),
+                    "hotkey_preset" => cfg.hotkey_preset = (*value).to_string(),
+                    _ => unreachable!(),
+                }
+                let w = validate(&mut cfg);
+                assert!(w.is_empty(), "{field} = {value} was rejected: {w:?}");
+            }
+        }
     }
 
     #[test]
