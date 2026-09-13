@@ -10,14 +10,20 @@
 //! so the hand-off is seamless.
 
 use crate::i18n::{tr, Key};
-use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player};
+// `HostTrait` / `DeviceTrait` are not re-exported by `rodio` itself, but `cpal`
+// is, and `default_output_device()` / `id()` / `name()` are trait methods — so
+// both traits have to be in scope for the device polling below to resolve.
+// `Source` is here for `try_seek`, which is how a track resumes on a new device.
+use rodio::{
+    cpal, cpal::traits::HostTrait, DeviceSinkBuilder, DeviceTrait, MixerDeviceSink, Player, Source,
+};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// rodio's `set_volume` is linear amplitude, which is perceptually wrong, so map
 /// the 0-100 UI slider through a power curve. Exponent 2.5 with a default of 70
@@ -228,18 +234,58 @@ fn pick(
     }
 }
 
+/// How often to ask Windows which output device is the default.
+const DEVICE_POLL: Duration = Duration::from_secs(2);
+
+/// Opens the *current* default output device and reports which one it is.
+///
+/// `DeviceSinkBuilder::open_default_sink()` cannot be used for this. It does not
+/// say which device it picked, so a later change cannot be noticed; and when the
+/// default device fails to open it falls back to enumerating every output device
+/// and opening the first one that works — which can quietly be the speakers while
+/// Windows' default is the headphones.
+fn open_default_device() -> Option<(MixerDeviceSink, String, String)> {
+    let device = cpal::default_host().default_output_device()?;
+    let key = device.id().ok()?.to_string();
+    // `description()` rather than the deprecated `name()`, which rodio points at
+    // for a full device description; only the display name is wanted here.
+    let name = device
+        .description()
+        .map(|d| d.name().to_string())
+        .unwrap_or_else(|_| "unknown output device".to_string());
+    let sink = DeviceSinkBuilder::from_device(device)
+        .ok()?
+        .open_stream()
+        .ok()?;
+    Some((sink, key, name))
+}
+
+/// Identity of the current default output device, or `None` when Windows reports
+/// no output device at all.
+fn default_device_key() -> Option<String> {
+    cpal::default_host()
+        .default_output_device()?
+        .id()
+        .ok()
+        .map(|id| id.to_string())
+}
+
 fn audio_thread(rx: mpsc::Receiver<Cmd>, state: Arc<PlayerState>) {
     // At boot the audio device may not be up yet, so retry rather than dying.
     let mut sink: Option<MixerDeviceSink> = None;
+    // Identity of the device the sink is open on, so a change can be noticed.
+    let mut device_key: Option<String> = None;
     for attempt in 0..40 {
-        match DeviceSinkBuilder::open_default_sink() {
-            Ok(s) => {
+        match open_default_device() {
+            Some((s, key, name)) => {
+                crate::log_info!("output device: {name}");
+                device_key = Some(key);
                 sink = Some(s);
                 break;
             }
-            Err(e) => {
+            None => {
                 if attempt == 0 {
-                    crate::log_warn!("audio device not available yet ({e}), retrying");
+                    crate::log_warn!("no default output device yet, retrying");
                 }
                 state.device_error.store(true, Ordering::Relaxed);
                 std::thread::sleep(Duration::from_millis(500));
@@ -250,13 +296,30 @@ fn audio_thread(rx: mpsc::Receiver<Cmd>, state: Arc<PlayerState>) {
             return;
         }
     }
-    let Some(sink) = sink else {
-        crate::log_error!("giving up on the audio device");
-        return;
+    let mut sink = match sink {
+        Some(s) => s,
+        None => {
+            // Nothing on the default device. Fall back to whatever rodio can open
+            // so the widget is not silent, but say so: that device may not be the
+            // one Windows considers default, which is exactly the "music comes out
+            // of the speakers while everything else uses the headphones" report.
+            match DeviceSinkBuilder::open_default_sink() {
+                Ok(s) => {
+                    crate::log_warn!(
+                        "could not open the default output device; using a fallback device"
+                    );
+                    s
+                }
+                Err(e) => {
+                    crate::log_error!("giving up on the audio device ({e})");
+                    return;
+                }
+            }
+        }
     };
     state.device_error.store(false, Ordering::Relaxed);
 
-    let player = Player::connect_new(sink.mixer());
+    let mut player = Player::connect_new(sink.mixer());
     player.set_volume(gain_for(state.volume.load(Ordering::Relaxed)));
     // NOTE: play() must be called once a source is queued — calling it on an
     // empty player is a no-op and the player stays paused.
@@ -277,6 +340,15 @@ fn audio_thread(rx: mpsc::Receiver<Cmd>, state: Arc<PlayerState>) {
     let mut history: Vec<PathBuf> = Vec::new();
     // Set whenever the queue is rebuilt; cleared once playback actually starts.
     let mut needs_play = true;
+    // Set when a device change has to resume playback even though `autoplay` is
+    // off, because the user was already listening.
+    let mut force_play = false;
+    let mut last_device_check = Instant::now();
+    // Where to resume the current track after an output-device change.
+    let mut pending_seek: Option<(PathBuf, Duration)> = None;
+    // The last default-device key that could not be opened, so a genuinely
+    // unopenable device is reported once instead of every two seconds.
+    let mut last_failed_key: Option<String> = None;
 
     let publish = |state: &Arc<PlayerState>, current: &Option<(PathBuf, Duration)>| {
         let (path, dur) = match current {
@@ -320,6 +392,7 @@ fn audio_thread(rx: mpsc::Receiver<Cmd>, state: Arc<PlayerState>) {
                     }
                 }
                 Cmd::SetQueue(paths) => {
+                    pending_seek = None;
                     player.clear();
                     appended.clear();
                     current = None;
@@ -373,6 +446,57 @@ fn audio_thread(rx: mpsc::Receiver<Cmd>, state: Arc<PlayerState>) {
             }
         }
 
+        // --- 1b. follow the Windows default output device ---------------------
+        // cpal binds a stream to the endpoint that was default when it was opened
+        // and never follows later changes. Plugging in headphones therefore moves
+        // every other application to the headphones while this player keeps
+        // feeding the speakers. Re-open on the new default, restarting the current
+        // track there.
+        if last_device_check.elapsed() >= DEVICE_POLL {
+            last_device_check = Instant::now();
+            let now = default_device_key();
+            if now.is_some() && now != device_key {
+                match open_default_device() {
+                    Some((new_sink, key, name)) => {
+                        let resume = current.as_ref().map(|(p, _)| p.clone());
+                        // Remember where to pick up, clamped just short of the end
+                        // so a seek cannot run past the last sample.
+                        let resume_pos = player.get_pos();
+                        let resume_pos = match current.as_ref().map(|(_, d)| *d) {
+                            Some(d) if !d.is_zero() && resume_pos + Duration::from_secs(1) >= d => {
+                                d.saturating_sub(Duration::from_secs(1))
+                            }
+                            _ => resume_pos,
+                        };
+                        pending_seek = resume.clone().map(|p| (p, resume_pos));
+                        // Keep the paused/playing state across the switch: someone
+                        // who paused and then plugged in headphones must not have
+                        // playback start on its own.
+                        let was_playing = !player.is_paused() && player.len() > 0;
+                        force_play = was_playing;
+                        crate::log_info!("output device changed to {name}; reopening");
+                        sink = new_sink;
+                        player = Player::connect_new(sink.mixer());
+                        player.set_volume(gain_for(state.volume.load(Ordering::Relaxed)));
+                        appended.clear();
+                        current = None;
+                        override_next = resume;
+                        device_key = Some(key);
+                        last_failed_key = None;
+                        needs_play = was_playing;
+                    }
+                    None => {
+                        if last_failed_key != now {
+                            crate::log_warn!(
+                                "the default output device changed but could not be opened; keeping the current one"
+                            );
+                            last_failed_key = now;
+                        }
+                    }
+                }
+            }
+        }
+
         // --- 2. publish the first track once something is queued --------------
         if current.is_none() {
             if let Some(entry) = appended.pop_front() {
@@ -415,7 +539,20 @@ fn audio_thread(rx: mpsc::Receiver<Cmd>, state: Arc<PlayerState>) {
             };
             let dur = lofty_duration(&path).unwrap_or(Duration::ZERO);
             match decode(&path) {
-                Some(src) => {
+                Some(mut src) => {
+                    // Seek the decoder *before* queueing it. Player::try_seek
+                    // returns early without doing anything while no sound is playing
+                    // yet, which is exactly the state of a player that was just
+                    // rebuilt for a new output device.
+                    if let Some((want, pos)) = pending_seek.take() {
+                        if want == path {
+                            if let Err(e) = src.try_seek(pos) {
+                                crate::log_warn!("cannot resume at {pos:?}: {e:?}");
+                            }
+                        } else {
+                            pending_seek = Some((want, pos));
+                        }
+                    }
                     player.append(src);
                     appended.push_back((path, dur));
                 }
@@ -424,9 +561,10 @@ fn audio_thread(rx: mpsc::Receiver<Cmd>, state: Arc<PlayerState>) {
         }
 
         // --- 5. start playback once a source is actually queued ---------------
-        if needs_play && autoplay && player.len() > 0 {
+        if needs_play && (autoplay || force_play) && player.len() > 0 {
             player.play();
             needs_play = false;
+            force_play = false;
         }
 
         // --- 6. publish position ----------------------------------------------

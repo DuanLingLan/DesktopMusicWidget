@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-09-13
+
+### Fixed
+
+- Playback now follows the Windows default output device. cpal binds a stream to the
+  endpoint that was default when the stream was opened, and never follows later
+  changes, so plugging in headphones moved every other application to the headphones
+  while the widget kept feeding the speakers. The default device is re-checked every
+  two seconds and the stream is re-opened on the new device.
+- The current track resumes from where it left off when the device changes, instead
+  of restarting. The decoder is seeked *before* it is queued, because
+  `Player::try_seek` returns early without doing anything while no sound is playing
+  yet - which is exactly the state of a freshly rebuilt player.
+- Playback state survives the switch: pausing first and then plugging in headphones
+  no longer starts playback on its own.
+- The chosen output device is logged at startup and whenever it changes, which is
+  what makes this class of problem diagnosable from `widget.log`.
+
+### Changed
+
+- The output no longer goes through `open_default_sink()`, which falls back to
+  enumerating every output device and opening the first one that works. On a machine
+  with virtual audio devices that can silently be a device other than the default.
+  The current default device is opened explicitly instead.
+
+[1.0.3]: https://github.com/DuanLingLan/DesktopMusicWidget/releases/tag/v1.0.3
 ## [1.0.2] - 2026-09-12
 
 ### Changed
