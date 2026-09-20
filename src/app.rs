@@ -344,7 +344,8 @@ impl App {
             return;
         }
         // Show Desktop can raise Explorer over a still-visible, non-minimized
-        // card. Check window classes only; avoid process queries on each tick.
+        // card. The cached anchor should sit immediately below us; checking that
+        // relationship needs no enumeration, allocation, or process query.
         unsafe {
             let anchor = self.desktop_anchor_cache.get();
             if !IsWindow(Some(anchor)).as_bool()
@@ -352,19 +353,6 @@ impl App {
                 || GetWindow(anchor, GW_HWNDPREV).ok() != Some(self.hwnd)
             {
                 self.apply_z_order();
-                return;
-            }
-            let mut current = GetWindow(self.hwnd, GW_HWNDPREV).ok();
-            for _ in 0..4096 {
-                let Some(hwnd) = current else { break };
-                let mut class = [0u16; 64];
-                let n = GetClassNameW(hwnd, &mut class);
-                let class = String::from_utf16_lossy(&class[..n as usize]);
-                if IsWindowVisible(hwnd).as_bool() && (class == "Progman" || class == "WorkerW") {
-                    self.apply_z_order();
-                    break;
-                }
-                current = GetWindow(hwnd, GW_HWNDPREV).ok();
             }
         }
     }

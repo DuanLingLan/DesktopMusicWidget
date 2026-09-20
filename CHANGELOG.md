@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.5] - 2026-09-20
+
+### Changed
+
+- The Show Desktop guard now checks the cached desktop anchor directly without
+  walking the entire window Z-order or allocating class-name strings every 250 ms.
+- Full desktop discovery now runs only when the cached anchor is invalid or the
+  widget is no longer immediately above it.
+
+[1.0.5]: https://github.com/DuanLingLan/DesktopMusicWidget/releases/tag/v1.0.5
+
 ## [1.0.4] - 2026-09-20
 
 ### Fixed
