@@ -10,6 +10,7 @@ use crate::menu::{self, Action};
 use crate::render::{Frame, Surface, SurfaceStyle};
 use crate::{art, autostart, log_error, log_info, log_warn};
 
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -118,6 +119,7 @@ fn monitor_rect(index: i32) -> RECT {
 
 pub struct App {
     pub hwnd: HWND,
+    desktop_anchor_cache: Cell<HWND>,
     pub dpi: u32,
     pub x: i32,
     pub y: i32,
@@ -166,6 +168,7 @@ impl App {
         let style = style_for(&cfg);
         Ok(Box::new(Self {
             hwnd: HWND::default(),
+            desktop_anchor_cache: Cell::new(HWND::default()),
             dpi,
             x: 0,
             y: 0,
@@ -286,9 +289,34 @@ impl App {
             // the card is above the icons' background but below normal windows.
             match desktop_anchor() {
                 Some(anchor) => {
+                    self.desktop_anchor_cache.set(anchor);
+                    // Leaving topmost mode must explicitly clear WS_EX_TOPMOST.
+                    if GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0 {
+                        let _ = SetWindowPos(
+                            self.hwnd,
+                            Some(HWND_NOTOPMOST),
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                        );
+                    }
+                    // hWndInsertAfter puts us BELOW that window. Use the
+                    // desktop's predecessor to place the card ABOVE it.
+                    let mut above = GetWindow(anchor, GW_HWNDPREV).unwrap_or(HWND_TOP);
+                    if above == self.hwnd {
+                        return;
+                    }
+                    // Inserting after a topmost window would promote us too.
+                    if above != HWND_TOP
+                        && GetWindowLongPtrW(above, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0
+                    {
+                        above = HWND_TOP;
+                    }
                     let _ = SetWindowPos(
                         self.hwnd,
-                        Some(anchor),
+                        Some(above),
                         0,
                         0,
                         0,
@@ -297,6 +325,7 @@ impl App {
                     );
                 }
                 None => {
+                    self.desktop_anchor_cache.set(HWND::default());
                     let _ = SetWindowPos(
                         self.hwnd,
                         Some(HWND_BOTTOM),
@@ -307,6 +336,35 @@ impl App {
                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
                     );
                 }
+            }
+        }
+    }
+    fn restore_z_order_if_covered(&self) {
+        if self.cfg.mode != "bottom" || self.dragging {
+            return;
+        }
+        // Show Desktop can raise Explorer over a still-visible, non-minimized
+        // card. Check window classes only; avoid process queries on each tick.
+        unsafe {
+            let anchor = self.desktop_anchor_cache.get();
+            if !IsWindow(Some(anchor)).as_bool()
+                || !IsWindowVisible(anchor).as_bool()
+                || GetWindow(anchor, GW_HWNDPREV).ok() != Some(self.hwnd)
+            {
+                self.apply_z_order();
+                return;
+            }
+            let mut current = GetWindow(self.hwnd, GW_HWNDPREV).ok();
+            for _ in 0..4096 {
+                let Some(hwnd) = current else { break };
+                let mut class = [0u16; 64];
+                let n = GetClassNameW(hwnd, &mut class);
+                let class = String::from_utf16_lossy(&class[..n as usize]);
+                if IsWindowVisible(hwnd).as_bool() && (class == "Progman" || class == "WorkerW") {
+                    self.apply_z_order();
+                    break;
+                }
+                current = GetWindow(hwnd, GW_HWNDPREV).ok();
             }
         }
     }
@@ -1150,6 +1208,7 @@ impl App {
                 }
             }
             WM_TIMER => {
+                self.restore_z_order_if_covered();
                 self.poll_state();
                 LRESULT(0)
             }
@@ -1176,7 +1235,7 @@ pub fn style_for(cfg: &Config) -> SurfaceStyle {
 }
 
 unsafe extern "system" fn enum_desktop_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    let (we, shell) = &mut *(lparam.0 as *mut (Vec<HWND>, Vec<HWND>));
+    let found = &mut *(lparam.0 as *mut Vec<(HWND, AnchorKind)>);
     if !IsWindowVisible(hwnd).as_bool() {
         return TRUE;
     }
@@ -1203,7 +1262,7 @@ unsafe extern "system" fn enum_desktop_proc(hwnd: HWND, lparam: LPARAM) -> BOOL 
                     .unwrap_or("")
                     .to_ascii_lowercase();
                 if file.starts_with("wallpaper") {
-                    we.push(hwnd);
+                    found.push((hwnd, AnchorKind::WallpaperEngine));
                 }
             }
             let _ = CloseHandle(handle);
@@ -1215,7 +1274,7 @@ unsafe extern "system" fn enum_desktop_proc(hwnd: HWND, lparam: LPARAM) -> BOOL 
     let n = GetClassNameW(hwnd, &mut class);
     let class = String::from_utf16_lossy(&class[..n as usize]);
     if class == "Progman" || class == "WorkerW" {
-        shell.push(hwnd);
+        found.push((hwnd, AnchorKind::DesktopBand));
     }
     TRUE
 }
@@ -1233,26 +1292,21 @@ pub enum AnchorKind {
 
 /// The window the card should sit directly above, and what kind of window it is.
 ///
-/// Wallpaper Engine creates its own bottom-most window, so when it is running
-/// that is the right anchor. **Without** Wallpaper Engine there is nothing
-/// there, and plain `HWND_BOTTOM` can land underneath the desktop icon layer —
-/// so the Explorer desktop band is used instead. That is what makes the widget
-/// work standalone.
+/// Use the highest visible Explorer or Wallpaper Engine window. Explorer may
+/// move above the wallpaper during Show Desktop; preferring the wallpaper in
+/// that case would leave the card covered by Explorer.
 pub fn desktop_anchor_kind() -> (Option<HWND>, AnchorKind) {
-    // One tuple so the callback can fill both lists without moving them.
-    let mut found: (Vec<HWND>, Vec<HWND>) = (Vec::new(), Vec::new());
+    // EnumWindows visits top to bottom. Stay above the highest desktop or
+    // wallpaper window, including when Show Desktop has raised Explorer.
+    let mut found: Vec<(HWND, AnchorKind)> = Vec::new();
     unsafe {
         let _ = EnumWindows(
             Some(enum_desktop_proc),
-            LPARAM(&mut found as *mut (Vec<HWND>, Vec<HWND>) as isize),
+            LPARAM(&mut found as *mut Vec<(HWND, AnchorKind)> as isize),
         );
     }
-    let (we, shell) = found;
-    if let Some(h) = we.into_iter().next() {
-        return (Some(h), AnchorKind::WallpaperEngine);
-    }
-    if let Some(h) = shell.into_iter().next() {
-        return (Some(h), AnchorKind::DesktopBand);
+    if let Some((h, kind)) = found.into_iter().next() {
+        return (Some(h), kind);
     }
     (None, AnchorKind::None)
 }

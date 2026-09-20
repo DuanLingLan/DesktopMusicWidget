@@ -52,7 +52,7 @@
 
 ## 下载与运行
 
-1. 从 [Releases](../../releases) 下载 `DesktopMusicWidget-v1.0.0-windows-x64-msvc.zip`
+1. 从 [Releases](../../releases) 下载最新的 `DesktopMusicWidget-v*-windows-x64-msvc.zip`
    （或者 `-gnu` 版本——它们是同一个程序用两种工具链构建出来的）。
 2. 解压到任意位置。没有安装程序。
 3. 运行 `desktop-music-widget.exe`。

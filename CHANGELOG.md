@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-09-20
+
+### Fixed
+
+- The widget remains visible above the desktop after clicking Show Desktop or
+  pressing `Win+D`.
+- When the desktop is dismissed, the widget returns below normal application
+  windows without taking focus.
+- Desktop and Wallpaper Engine anchors are selected by their current Z-order, so
+  Explorer cannot cover the widget after raising the desktop band.
+
+[1.0.4]: https://github.com/DuanLingLan/DesktopMusicWidget/releases/tag/v1.0.4
+
 ## [1.0.3] - 2026-09-13
 
 ### Fixed
